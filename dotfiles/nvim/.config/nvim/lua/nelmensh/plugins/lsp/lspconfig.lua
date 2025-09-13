@@ -31,7 +31,7 @@ return {
   },
   config = function()
     local lspconfig = require("lspconfig")
-    --local mason_lspconfig = require("mason-lspconfig")
+    local mason_lspconfig = require("mason-lspconfig")
     local cmp_nvim_lsp = require("cmp_nvim_lsp")
 
     -- Buffer-local keymaps on LSP attach
@@ -57,60 +57,54 @@ return {
       end,
     })
 
-    require("mason-lspconfig").setup({
-	  ensure_installed = { "clangd", "cmake", "bashls", "jsonls", "yamlls" },
-  	 -- automatic_installation = false,
-    })
+   --  require("mason-lspconfig").setup({
+	  -- ensure_installed = { "clangd", "cmake", "bashls", "jsonls", "yamlls" },
+  	--  -- automatic_installation = false,
+   --  })
+    local servers = { "clangd", "cmake", "bashls", "jsonls", "yamlls", "lua_ls" }
+    mason_lspconfig.setup({ ensure_installed = servers })
 
     -- Capabilities (completion)
     local capabilities = cmp_nvim_lsp.default_capabilities()
 
     -- Diagnostic signs
-    local signs = { Error = " ", Warn = " ", Hint = "󰠠 ", Info = " " }
-    for type, icon in pairs(signs) do
-      local hl = "DiagnosticSign" .. type
-      vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
+    -- local signs = { Error = " ", Warn = " ", Hint = "󰠠 ", Info = " " }
+    -- for type, icon in pairs(signs) do
+    --   local hl = "DiagnosticSign" .. type
+    --   vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
+    -- end
+    vim.diagnostic.config({
+    signs = {
+    text = {
+      [vim.diagnostic.severity.ERROR] = " ",
+      [vim.diagnostic.severity.WARN]  = " ",
+      [vim.diagnostic.severity.HINT]  = "󰠠 ",
+      [vim.diagnostic.severity.INFO]  = " ",
+      },
+     },
+   })
+    -- Small helpers
+    local function setup_default(name)
+      if lspconfig[name] then
+        lspconfig[name].setup({ capabilities = capabilities })
+      end
     end
 
-    -- Handlers: default + per-server overrides
-      require("mason-lspconfig").setup_handlers({
-  	function(server_name)
-    	 local ok, server = pcall(function() return lspconfig[server_name] end)
-    	 if not ok or not server then
-      		vim.notify("mason-lspconfig: server not found in lspconfig: " .. server_name, vim.log.levels.WARN)
-      	 return
-    	end
-    	server.setup({ capabilities = capabilities })
-  	end,
-
-      -- ---------- C/C++ (clangd) ----------
-      ["clangd"] = function()
+    local function setup_override(name)
+      if name == "clangd" then
         lspconfig.clangd.setup({
           capabilities = capabilities,
           cmd = {
             "clangd",
-            "--background-index",
-            "--clang-tidy",
-            "--completion-style=detailed",
-            "--header-insertion=iwyu",
-            "--cross-file-rename",
+            "--background-index", "--clang-tidy",
+            "--completion-style=detailed", "--header-insertion=iwyu",
           },
-          -- If you ever need it:
-          -- init_options = { clangdFileStatus = true },
-          -- root_dir will auto-detect compile_commands.json / .git
         })
-      end,
-
-      -- ---------- CMake ----------
-      ["cmake"] = function()
-        lspconfig.cmake.setup({
-          capabilities = capabilities,
-          -- nothing special needed; pairs nicely with compile_commands.json for clangd
-        })
-      end,
-
-      -- ---------- Lua (Neovim config) ----------
-      ["lua_ls"] = function()
+        return true
+      elseif name == "cmake" then
+        lspconfig.cmake.setup({ capabilities = capabilities })
+        return true
+      elseif name == "lua_ls" then
         lspconfig.lua_ls.setup({
           capabilities = capabilities,
           settings = {
@@ -121,23 +115,17 @@ return {
             },
           },
         })
-      end,
-
-      -- ---------- JSON ----------
-      ["jsonls"] = function()
+        return true
+      elseif name == "jsonls" then
+        local ok, schemastore = pcall(require, "schemastore")
         lspconfig.jsonls.setup({
           capabilities = capabilities,
-          settings = {
-            json = {
-              schemas = require("schemastore").json.schemas(), -- if you install b0o/schemastore.nvim
-              validate = { enable = true },
-            },
-          },
+          settings = ok and {
+            json = { schemas = schemastore.json.schemas(), validate = { enable = true } },
+          } or nil,
         })
-      end,
-
-      -- ---------- YAML ----------
-      ["yamlls"] = function()
+        return true
+      elseif name == "yamlls" then
         lspconfig.yamlls.setup({
           capabilities = capabilities,
           settings = {
@@ -148,8 +136,96 @@ return {
             },
           },
         })
-      end,
-    })
-  end,
-}
+        return true
+      end
+      return false
+    end
+
+
+    -- Configure every server in our list (works on all versions; no setup_handlers)
+    for _, name in ipairs(servers) do
+      if not setup_override(name) then
+        setup_default(name)
+      end
+    end
+
+   --    require("mason-lspconfig").setup_handlers({
+  	-- function(server_name)
+   --  	 local ok, server = pcall(function() return lspconfig[server_name] end)
+   --  	 if not ok or not server then
+   --    		vim.notify("mason-lspconfig: server not found in lspconfig: " .. server_name, vim.log.levels.WARN)
+   --    	 return
+   --  	end
+   --  	server.setup({ capabilities = capabilities })
+  	-- end,
+
+      -- ---------- C/C++ (clangd) ----------
+--       ["clangd"] = function()
+--         lspconfig.clangd.setup({
+--           capabilities = capabilities,
+--           cmd = {
+--             "clangd",
+--             "--background-index",
+--             "--clang-tidy",
+--             "--completion-style=detailed",
+--             "--header-insertion=iwyu",
+--             "--cross-file-rename",
+--           },
+--           -- If you ever need it:
+--           -- init_options = { clangdFileStatus = true },
+--           -- root_dir will auto-detect compile_commands.json / .git
+--         })
+--       end,
+--
+--       -- ---------- CMake ----------
+--       ["cmake"] = function()
+--         lspconfig.cmake.setup({
+--           capabilities = capabilities,
+--           -- nothing special needed; pairs nicely with compile_commands.json for clangd
+--         })
+--       end,
+--
+--       -- ---------- Lua (Neovim config) ----------
+--       ["lua_ls"] = function()
+--         lspconfig.lua_ls.setup({
+--           capabilities = capabilities,
+--           settings = {
+--             Lua = {
+--               diagnostics = { globals = { "vim" } },
+--               workspace = { checkThirdParty = false },
+--               telemetry = { enable = false },
+--             },
+--           },
+--         })
+--       end,
+--
+--       -- ---------- JSON ----------
+--       ["jsonls"] = function()
+--         lspconfig.jsonls.setup({
+--           capabilities = capabilities,
+--           settings = {
+--             json = {
+--               schemas = require("schemastore").json.schemas(), -- if you install b0o/schemastore.nvim
+--               validate = { enable = true },
+--             },
+--           },
+--         })
+--       end,
+--
+--       -- ---------- YAML ----------
+--       ["yamlls"] = function()
+--         lspconfig.yamlls.setup({
+--           capabilities = capabilities,
+--           settings = {
+--             yaml = {
+--               schemaStore = { enable = true, url = "https://www.schemastore.org/api/json/catalog.json" },
+--               format = { enable = true },
+--               validate = true,
+--             },
+--           },
+--         })
+--       end,
+--     })
+   end,
+ }
 

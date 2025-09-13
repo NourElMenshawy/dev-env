@@ -19,20 +19,78 @@ warn() { printf "\033[1;33m!! \033[0m %s\n" "$*"; printf "[%s] [WARN ] %s\n" "$(
 err()  { printf "\033[1;31mEE \033[0m %s\n" "$*" >&2; printf "[%s] [ERROR] %s\n" "$(now)" "$*" >>"$LOGFILE"; }
 die()  { err "$*"; exit 1; }
 
+# return 0 (true) if array contains needle
+_arr_has() {
+  local needle="$1"; shift
+  local x
+  for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done
+  return 1
+}
+
+# decide final module list given MINIMAL, ONLY, SKIP
+compute_modules() {
+  local base=("${DEFAULT_MODULES[@]}")
+  (( MINIMAL )) && base=(zsh tmux nvim)
+
+  local filtered=()
+
+  if ((${#ONLY_MODULES[@]})); then
+    # keep only those in ONLY
+    local m
+    for m in "${base[@]}"; do
+      _arr_has "$m" "${ONLY_MODULES[@]}" && filtered+=("$m")
+    done
+  else
+    filtered=("${base[@]}")
+  fi
+
+  if ((${#SKIP_MODULES[@]})); then
+    local keep=()
+    local m
+    for m in "${filtered[@]}"; do
+      _arr_has "$m" "${SKIP_MODULES[@]}" || keep+=("$m")
+    done
+    filtered=("${keep[@]}")
+  fi
+
+  printf '%s\n' "${filtered[@]}"
+}
+
+
 # flags
 DRY_RUN=0
 DO_FONTS=1
 MINIMAL=0
 DEBUG=0
+SKIP_MODULES=()   # e.g., ("zsh" "tmux")
+ONLY_MODULES=()   # e.g., ("nvim" "git")
+
+# small util: split comma-separated lists into array
+split_csv() {
+  local IFS=','; read -ra __out <<<"$1"; printf '%s\n' "${__out[@]}"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run)  DRY_RUN=1 ;;
-    --no-fonts) DO_FONTS=0 ;;
-    --minimal)  MINIMAL=1 ;;
-    --debug)    DEBUG=1 ;;
-    *)          warn "Unknown flag: $1" ;;
-  esac; shift
+    --dry-run)   DRY_RUN=1 ;;
+    --no-fonts)  DO_FONTS=0 ;;
+    --minimal)   MINIMAL=1 ;;
+    --debug)     DEBUG=1 ;;
+    --skip)
+      shift
+      [[ $# -eq 0 ]] && { echo "ERROR: --skip needs a value"; exit 1; }
+      while IFS= read -r item; do SKIP_MODULES+=("$item"); done < <(split_csv "$1")
+      ;;
+    --only)
+      shift
+      [[ $# -eq 0 ]] && { echo "ERROR: --only needs a value"; exit 1; }
+      while IFS= read -r item; do ONLY_MODULES+=("$item"); done < <(split_csv "$1")
+      ;;
+    *)
+      warn "Unknown flag: $1"
+      ;;
+  esac
+  shift
 done
 
 # enable command tracing if --debug
@@ -73,6 +131,8 @@ fi
 log "Flags: DRY_RUN=$DRY_RUN DO_FONTS=$DO_FONTS MINIMAL=$MINIMAL DEBUG=$DEBUG"
 log "Detected: OSTYPE=$OSTYPE OS=$OS PM=$PM SUDO=${SUDO:-<none>}"
 log "Repo cwd: $(pwd -P)"
+log "ONLY_MODULES: ${ONLY_MODULES[*]:-(none)}"
+log "SKIP_MODULES: ${SKIP_MODULES[*]:-(none)}"
 
 #====================#
 # Network check      #
@@ -219,9 +279,10 @@ stow_dotfiles() {
   local repo_root; repo_root="$(cd "$(dirname "$0")" && pwd -P)"
   log "stow repo_root=$repo_root"
 
-  local modules=("${DEFAULT_MODULES[@]}")
-  (( MINIMAL )) && modules=(zsh tmux nvim)
-  log "stow modules: ${modules[*]}"
+  # build final module list
+  mapfile -t modules < <(compute_modules)
+  log "stow modules (final): ${modules[*]}"
+  [[ ${#modules[@]} -eq 0 ]] && { warn "No modules selected (after --only/--skip). Skipping stow."; return; }
 
   for m in "${modules[@]}"; do
     local src="$repo_root/$m"
@@ -231,10 +292,9 @@ stow_dotfiles() {
     fi
 
     log "stow module: $m (preview)"
-    # preview planned actions
     run stow -nv --target="$HOME" "$m" || warn "stow preview reported issues for '$m'"
 
-    # conflict scan: detect non-symlink files in the way
+    # conflict scan
     local conflicts=0
     while IFS= read -r -d '' file; do
       local rel="${file#"$src"/}"
@@ -246,8 +306,7 @@ stow_dotfiles() {
     done < <(find "$src" -type f -print0)
 
     if (( conflicts > 0 )); then
-      warn "$conflicts conflict(s) detected in module '$m'. Skipping apply for safety."
-      warn "Resolve manually or adopt with:  stow --adopt --target=\"$HOME\" $m  (then review 'git status')"
+      warn "$conflicts conflict(s) in '$m'. Skipping apply. (You can adopt with: stow --adopt --target=\"\$HOME\" $m )"
       continue
     fi
 
