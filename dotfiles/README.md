@@ -25,14 +25,14 @@ Everything is symlinked with **GNU Stow**.
 ## 📁 Repo layout
 
 ```
-.
 ├── dotfiles
-│   ├── git/                # e.g. git/.gitconfig (optional)
-│   ├── nvim/.config/nvim/  # full Neovim config
-│   ├── scripts/            # optional extra scripts
-│   ├── summon.sh           # the bootstrap script (run this)
-│   ├── tmux/.tmux.conf
-│   └── zsh/.zshrc
+│ ├── git/ # e.g. git/.gitconfig (optional)
+│ ├── nvim/.config/nvim/ # full Neovim config
+│ ├── ghostty/.config/ghostty/ # Ghostty terminal config
+│ ├── scripts/ # optional extra scripts
+│ ├── summon.sh # the bootstrap script (run this)
+│ ├── tmux/.tmux.conf
+│ └── zsh/.zshrc
 └── README.md
 ```
 

@@ -51,3 +51,8 @@ vim.keymap.set('n', '<leader><left>', '<C-w><C-h>', { desc = 'Move focus to the 
 vim.keymap.set('n', '<leader><right>', '<C-w><C-l>', { desc = 'Move focus to the right window' })
 vim.keymap.set('n', '<leader><down>', '<C-w><C-j>', { desc = 'Move focus to the lower window' })
 vim.keymap.set('n', '<leader><up>', '<C-w><C-k>', { desc = 'Move focus to the lower window' })
+
+-- Go back to previous cursor position (jumplist back)
+keymap.set("n", "<leader>b", "<C-o>", { desc = "Jump back to previous file/position" })
+-- Go forward again (jumplist forward)
+keymap.set("n", "<leader>n", "<C-i>", { desc = "Jump forward to next file/position" })
