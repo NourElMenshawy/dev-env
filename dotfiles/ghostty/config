@@ -1,3 +1,4 @@
+
 # This is the configuration file for Ghostty.
 #
 # This template file has been automatically created at the following
@@ -42,7 +43,8 @@
 # # Just for example:
 # resize-overlay-duration = 4s 200ms
 # Theme (light like Windows Terminal’s half-light)
-theme = "Pro Light"
+#theme = "Pro Light"
+theme = "Horizon"
 
 # Font face and size
 font-family = "MesloLGS NF"
@@ -51,10 +53,11 @@ font-size = 12
 shell-integration-features = no-cursor,sudo,no-title
 cursor-style = block
 adjust-cell-height = 35%
-# background-opacity = 0.96
+background-opacity = 1
 
 mouse-hide-while-typing = true
 mouse-scroll-multiplier = 2
+focus-follows-mouse = false
 #window-decoration = none
 window-padding-balance = true 
 window-save-state = always
@@ -63,8 +66,7 @@ window-save-state = always
 # keybindings
 keybind = ctrl+space>r=reload_config
 keybind = ctrl+space>x=close_surface
-
-keybind = ctrl+space>n=new_window
+keybind = ctrl+space>w=new_window
 
 # tabs 
 keybind = ctrl+space>t=new_tab
@@ -101,7 +103,7 @@ keybind = ctrl+space>e=equalize_splits
 copy-on-select = clipboard
 
 #shader
-# custom-shader = ~/.config/ghostty/shaders/blue-crt.glsl
+#custom-shader = ~/.config/ghostty/shaders/blue-crt.glsl
 
 # Ensure the shader is animated (choices include: always / never; depends on build)
 custom-shader-animation = always

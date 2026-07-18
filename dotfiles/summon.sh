@@ -8,6 +8,9 @@ DEFAULT_MODULES=(zsh tmux nvim git)
 DEFAULT_FONT="FiraCode Nerd Font"
 DEFAULT_FONT_MAC_CASK="font-fira-code-nerd-font"
 LOGFILE="$HOME/.dotfiles-install.log"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROS2_PLUGIN_SOURCE_REL="zsh/ros2-tools.plugin.zsh"
+ROS2_PLUGIN_NAME="ros2-tools"
 
 #====================#
 # Logging / helpers  #
@@ -130,7 +133,8 @@ fi
 
 log "Flags: DRY_RUN=$DRY_RUN DO_FONTS=$DO_FONTS MINIMAL=$MINIMAL DEBUG=$DEBUG"
 log "Detected: OSTYPE=$OSTYPE OS=$OS PM=$PM SUDO=${SUDO:-<none>}"
-log "Repo cwd: $(pwd -P)"
+log "Repo root: $REPO_ROOT"
+log "Invocation cwd: $(pwd -P)"
 log "ONLY_MODULES: ${ONLY_MODULES[*]:-(none)}"
 log "SKIP_MODULES: ${SKIP_MODULES[*]:-(none)}"
 
@@ -276,7 +280,7 @@ ensure_p10k_theme() {
 #====================#
 stow_dotfiles() {
   log "Stowing dotfiles into \$HOME"
-  local repo_root; repo_root="$(cd "$(dirname "$0")" && pwd -P)"
+  local repo_root="$REPO_ROOT"
   log "stow repo_root=$repo_root"
 
   # build final module list
@@ -314,6 +318,65 @@ stow_dotfiles() {
     run stow --restow --target="$HOME" "$m"
     log "stowed: $m"
   done
+}
+
+
+#=========================#
+# ROS 2 tools Zsh plugin #
+#=========================#
+module_selected() {
+  local wanted="$1"
+  local selected=()
+  mapfile -t selected < <(compute_modules)
+  _arr_has "$wanted" "${selected[@]}"
+}
+
+setup_ros2_tools_plugin() {
+  if ! module_selected zsh; then
+    log "ROS 2 tools: zsh module is not selected; skipping plugin installation"
+    return 0
+  fi
+
+  local source_file="$REPO_ROOT/$ROS2_PLUGIN_SOURCE_REL"
+  local zsh_custom="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+  local destination_dir="$zsh_custom/plugins/$ROS2_PLUGIN_NAME"
+  local destination_file="$destination_dir/$ROS2_PLUGIN_NAME.plugin.zsh"
+
+  if [[ ! -f "$source_file" ]]; then
+    die "ROS 2 tools plugin source not found: $source_file"
+  fi
+
+  if ! need zsh; then
+    die "zsh is required to validate the ROS 2 tools plugin"
+  fi
+
+  log "ROS 2 tools: validating source plugin"
+  run zsh -n "$source_file" || die "ROS 2 tools plugin has invalid Zsh syntax: $source_file"
+
+  log "ROS 2 tools: installing plugin"
+  log "  source:      $source_file"
+  log "  destination: $destination_file"
+
+  run mkdir -p "$destination_dir"
+  run install -m 0644 "$source_file" "$destination_file"
+
+  if (( ! DRY_RUN )); then
+    zsh -n "$destination_file" || die "Installed ROS 2 tools plugin failed validation: $destination_file"
+
+    if ! cmp -s "$source_file" "$destination_file"; then
+      die "Installed ROS 2 tools plugin differs from its source"
+    fi
+  fi
+
+  log "ROS 2 tools plugin installed successfully"
+
+  local zshrc="$HOME/.zshrc"
+  if [[ -f "$zshrc" ]] && grep -Eq '(^|[[:space:]])rosload[[:space:]]*\(\)' "$zshrc"; then
+    log "ROS 2 tools: lazy loader 'rosload' found in $zshrc"
+  else
+    warn "ROS 2 tools plugin is installed, but no rosload() lazy loader was detected in $zshrc"
+    warn "Keep the lazy loader in your stowed Zsh configuration; do not add ros2-tools to plugins=(...)."
+  fi
 }
 
 #====================#
@@ -382,6 +445,15 @@ sanity_report() {
   for c in git zsh tmux nvim stow rg fd fzf cmake g++ clangd gdb; do
     if need "$c"; then printf "  - %-7s: ok (%s)\n" "$c" "$(command -v "$c")"; else printf "  - %-7s: MISSING\n" "$c"; fi
   done
+  local ros2_plugin="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/$ROS2_PLUGIN_NAME/$ROS2_PLUGIN_NAME.plugin.zsh"
+  if [[ -f "$ros2_plugin" ]]; then
+    printf "  - %-7s: ok (%s)\n" "ros2-zsh" "$ros2_plugin"
+  elif module_selected zsh; then
+    printf "  - %-7s: MISSING (%s)\n" "ros2-zsh" "$ros2_plugin"
+  else
+    printf "  - %-7s: skipped (zsh module not selected)\n" "ros2-zsh"
+  fi
+
   if [[ "$OS" == "linux-wsl" ]]; then
     warn "WSL: set Windows Terminal font to a Nerd Font (e.g., '$DEFAULT_FONT') for icons."
   fi
@@ -397,6 +469,7 @@ main() {
   ensure_ohmyzsh
   ensure_p10k_theme
   stow_dotfiles
+  setup_ros2_tools_plugin
   maybe_set_default_shell
   setup_tmux
   (( MINIMAL )) || bootstrap_nvim
@@ -406,4 +479,3 @@ main() {
 }
 
 main "$@"
-
