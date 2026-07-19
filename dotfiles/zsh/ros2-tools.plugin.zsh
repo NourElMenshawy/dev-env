@@ -506,14 +506,67 @@ _ros2_build_workspace() {
   local workspace="$1"
   shift
 
-  # Build against underlays only. Do not source this workspace's old overlay.
+  # Build only against installed underlays.
+  # Do not source a possibly stale workspace overlay.
   _ros2_source_underlays || return 1
+
   cd "$workspace" || return 1
 
-  command colcon build \
-    --symlink-install \
-    --event-handlers console_cohesion+ \
-    "$@"
+  local -a user_arguments
+  user_arguments=("$@")
+
+  local -a build_arguments
+  build_arguments=(
+    --symlink-install
+    --event-handlers
+    console_cohesion+
+  )
+
+  local -a normal_arguments
+  local -a cmake_arguments
+
+  local argument
+  local reading_cmake_arguments=0
+
+  for argument in "${user_arguments[@]}"; do
+    if [[ "$argument" == "--cmake-args" ]]; then
+      reading_cmake_arguments=1
+      continue
+    fi
+
+    if (( reading_cmake_arguments )); then
+      # A new colcon option ends the cmake-argument section.
+      if [[ "$argument" == --* &&
+            "$argument" != -D* &&
+            "$argument" != -U* &&
+            "$argument" != -W* ]]; then
+        reading_cmake_arguments=0
+        normal_arguments+=("$argument")
+      else
+        cmake_arguments+=("$argument")
+      fi
+    else
+      normal_arguments+=("$argument")
+    fi
+  done
+
+  # Add it only once.
+  if (( ! ${cmake_arguments[(Ie)-DCMAKE_EXPORT_COMPILE_COMMANDS=ON]} )); then
+    cmake_arguments+=(
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    )
+  fi
+
+  build_arguments+=("${normal_arguments[@]}")
+
+  if (( ${#cmake_arguments[@]} > 0 )); then
+    build_arguments+=(
+      --cmake-args
+      "${cmake_arguments[@]}"
+    )
+  fi
+
+  command colcon build "${build_arguments[@]}"
 
   local build_status=$?
 
@@ -522,6 +575,12 @@ _ros2_build_workspace() {
     return "$build_status"
   fi
 
+  # Generate one workspace-level database for clangd.
+  _ros2_merge_compile_commands "$workspace" || {
+    _ros2_warning \
+      "build succeeded, but compile_commands.json could not be generated."
+  }
+
   if [[ ! -f "$workspace/install/setup.zsh" ]]; then
     _ros2_error "no workspace setup script was generated:"
     echo "  $workspace/install/setup.zsh"
@@ -529,12 +588,20 @@ _ros2_build_workspace() {
   fi
 
   _ros2_activate_workspace_environment "$workspace" || return 1
+
   cd "$workspace" || return 1
 
   _ros2_info "build completed."
+
   echo
   echo "Workspace overlay sourced:"
   echo "  $workspace/install/setup.zsh"
+
+  if [[ -f "$workspace/compile_commands.json" ]]; then
+    echo
+    echo "Compilation database:"
+    echo "  $workspace/compile_commands.json"
+  fi
 }
 
 ros_workspace_build() {
@@ -1370,6 +1437,11 @@ Build
   rc COLCON_ARGUMENTS...
       Run any colcon command from the active workspace.
 
+  rwcc
+      Merge package compilation databases into:
+      ACTIVE_WORKSPACE/compile_commands.json
+
+      This is normally done automatically after every successful build.
 
 Package creation and discovery
 
@@ -1765,6 +1837,146 @@ EOF
       ;;
   esac
 }
+# =============================================================================
+# Compilation database
+# =============================================================================
+
+_ros2_merge_compile_commands() {
+  local workspace="$1"
+
+  if [[ -z "$workspace" || ! -d "$workspace" ]]; then
+    _ros2_error "invalid workspace for compilation database."
+    return 1
+  fi
+
+  local output_file="$workspace/compile_commands.json"
+
+  python3 - "$workspace" "$output_file" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+workspace = Path(sys.argv[1]).resolve()
+output_file = Path(sys.argv[2]).resolve()
+build_directory = workspace / "build"
+
+if not build_directory.is_dir():
+    print(
+        f"ROS 2 warning: build directory does not exist: "
+        f"{build_directory}",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
+databases = sorted(
+    build_directory.glob("*/compile_commands.json")
+)
+
+merged_entries = []
+seen_files = set()
+
+for database in databases:
+    try:
+        entries = json.loads(database.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        print(
+            f"ROS 2 warning: skipped invalid database "
+            f"{database}: {error}",
+            file=sys.stderr,
+        )
+        continue
+
+    if not isinstance(entries, list):
+        print(
+            f"ROS 2 warning: skipped non-list database: "
+            f"{database}",
+            file=sys.stderr,
+        )
+        continue
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        source_file = entry.get("file")
+
+        if not source_file:
+            continue
+
+        directory = Path(
+            entry.get("directory", workspace)
+        )
+
+        source_path = Path(source_file)
+
+        if not source_path.is_absolute():
+            source_path = directory / source_path
+
+        source_path = source_path.resolve()
+        source_key = os.fspath(source_path)
+
+        # Keep only the latest entry for a source file.
+        if source_key in seen_files:
+            continue
+
+        seen_files.add(source_key)
+
+        normalized_entry = dict(entry)
+        normalized_entry["file"] = source_key
+        normalized_entry["directory"] = os.fspath(
+            directory.resolve()
+        )
+
+        merged_entries.append(normalized_entry)
+
+if not merged_entries:
+    print(
+        "ROS 2 warning: no compile_commands.json files "
+        "were found under build/*/.",
+        file=sys.stderr,
+    )
+
+    try:
+        output_file.unlink()
+    except FileNotFoundError:
+        pass
+
+    sys.exit(0)
+
+temporary_file = output_file.with_suffix(
+    ".json.tmp"
+)
+
+temporary_file.write_text(
+    json.dumps(
+        merged_entries,
+        indent=2,
+    )
+    + "\n"
+)
+
+temporary_file.replace(output_file)
+
+print(
+    f"Created {output_file} with "
+    f"{len(merged_entries)} entries from "
+    f"{len(databases)} package databases."
+)
+PY
+
+  local merge_status=$?
+
+  if (( merge_status != 0 )); then
+    _ros2_error "failed to create workspace compilation database."
+    return "$merge_status"
+  fi
+
+  if [[ -f "$output_file" ]]; then
+    _ros2_info "clangd compilation database updated:"
+    echo "  $output_file"
+  fi
+}
 
 # =============================================================================
 # Aliases
@@ -1840,6 +2052,9 @@ alias rignored='ros_package_ignored_list'
 alias rmi='ros_mixin_install'
 alias rmu='ros_mixin_update'
 alias rml='ros_mixin_list'
+
+# Compile Merge
+alias rwcc='ros_workspace_compile_commands'
 
 # Help.
 alias rh='ros_help'
