@@ -20,19 +20,24 @@
 =====================================================================
 --]]
 return {
-  "stevearc/conform.nvim",
-  opts = {
-    formatters_by_ft = {
-      lua = { "stylua" },
-      python = { "black" },
-      cpp = { "clang-format" },  -- <--- add this
-      c = { "clang-format" },
-    },
-    format_on_save = {
-      lsp_fallback = true,
-      timeout_ms = 1000,
-    },
-  },
+	"stevearc/conform.nvim",
+	opts = {
+		formatters_by_ft = {
+			lua = { "stylua" },
+			python = { "black" },
+			cpp = { "clang-format" },
+			c = { "clang-format" },
+		},
+
+		formatters = {
+			["clang-format"] = {
+				command = "/usr/bin/clang-format",
+			},
+		},
+
+		format_on_save = {
+			lsp_fallback = true,
+			timeout_ms = 1000,
+		},
+	},
 }
-
-

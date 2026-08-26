@@ -894,17 +894,214 @@ _ros2_create_package() {
   )
 }
 
+_ros2_configure_interface_package() {
+  local workspace="$1"
+  local package_name="$2"
+  shift 2
+
+  local package_directory="$workspace/src/$package_name"
+  local cmake_file="$package_directory/CMakeLists.txt"
+  local package_xml="$package_directory/package.xml"
+
+  if [[ ! -d "$package_directory" ]]; then
+    _ros2_error "interface package directory was not created:"
+    echo "  $package_directory"
+    return 1
+  fi
+
+  mkdir -p \
+    "$package_directory/msg" \
+    "$package_directory/srv" \
+    "$package_directory/action" ||
+    return 1
+
+  {
+    cat <<EOF
+cmake_minimum_required(VERSION 3.20)
+project(${package_name})
+
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+EOF
+
+    local dependency
+    for dependency in "$@"; do
+      printf 'find_package(%s REQUIRED)\n' "$dependency"
+    done
+
+    cat <<'EOF'
+
+# Automatically discover this package's own interface-definition files.
+#
+# These globs do not find ROS packages. They only collect local files such as:
+#
+#   msg/Num.msg
+#   srv/AddThreeInts.srv
+#   action/FlyTo.action
+#
+# CONFIGURE_DEPENDS asks CMake to reconfigure when matching files are added
+# or removed.
+file(GLOB message_files
+  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+  CONFIGURE_DEPENDS
+  "msg/*.msg"
+)
+
+file(GLOB service_files
+  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+  CONFIGURE_DEPENDS
+  "srv/*.srv"
+)
+
+file(GLOB action_files
+  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+  CONFIGURE_DEPENDS
+  "action/*.action"
+)
+
+set(interface_files
+  ${message_files}
+  ${service_files}
+  ${action_files}
+)
+
+# A newly-created package contains empty msg/, srv/, and action/ directories.
+# Build successfully until at least one definition file has been added.
+if(interface_files)
+  rosidl_generate_interfaces(
+    ${PROJECT_NAME}
+    ${interface_files}
+EOF
+
+    if (( $# > 0 )); then
+      echo "    DEPENDENCIES"
+
+      for dependency in "$@"; do
+        printf '      %s\n' "$dependency"
+      done
+    fi
+
+    cat <<'EOF'
+  )
+endif()
+
+ament_export_dependencies(rosidl_default_runtime)
+
+ament_package()
+EOF
+  } >"$cmake_file" || return 1
+
+  python3 - "$package_xml" "$@" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+path = Path(sys.argv[1])
+external_dependencies = sys.argv[2:]
+
+tree = ET.parse(path)
+root = tree.getroot()
+
+
+def has_entry(tag: str, value: str) -> bool:
+    return any(
+        element.tag == tag and (element.text or "").strip() == value
+        for element in root
+    )
+
+
+def insert_before_export(tag: str, value: str) -> None:
+    if has_entry(tag, value):
+        return
+
+    element = ET.Element(tag)
+    element.text = value
+
+    children = list(root)
+    export_index = next(
+        (index for index, child in enumerate(children) if child.tag == "export"),
+        len(children),
+    )
+    root.insert(export_index, element)
+
+
+insert_before_export("buildtool_depend", "rosidl_default_generators")
+insert_before_export("exec_depend", "rosidl_default_runtime")
+insert_before_export("member_of_group", "rosidl_interface_packages")
+
+for dependency in external_dependencies:
+    insert_before_export("depend", dependency)
+
+ET.indent(tree, space="  ")
+tree.write(path, encoding="utf-8", xml_declaration=True)
+PY
+
+  _ros2_info "interface package configured:"
+  echo "  $package_directory"
+  echo
+  echo "Interface directories:"
+  echo "  msg/"
+  echo "  srv/"
+  echo "  action/"
+
+  if (( $# > 0 )); then
+    echo
+    echo "External interface dependencies:"
+    printf "  %s\n" "$@"
+  fi
+
+  echo
+  echo "Add definition files, then build with:"
+  echo "  rwbp $package_name"
+}
+
+_ros2_create_interface_package() {
+  local package_name="$1"
+  shift
+
+  local workspace
+  workspace="$(_ros2_active_workspace)" || return 1
+
+  _ros2_create_package \
+    ament_cmake \
+    "$package_name" \
+    "" \
+    "$@" ||
+    return 1
+
+  _ros2_configure_interface_package \
+    "$workspace" \
+    "$package_name" \
+    "$@"
+}
+
 ros_package_cpp() {
+  local interface_mode=0
+
+  case "${1:-}" in
+    -i|--interface)
+      interface_mode=1
+      shift
+      ;;
+  esac
+
   local package_name="${1:-}"
 
   if [[ -z "$package_name" ]]; then
     echo "Usage:"
     echo "  rpcpp PACKAGE_NAME [DEPENDENCY...]"
+    echo "  rpcpp -i PACKAGE_NAME [INTERFACE_DEPENDENCY...]"
+    echo "  rpcpp --interface PACKAGE_NAME [INTERFACE_DEPENDENCY...]"
     return 1
   fi
 
   shift
-  _ros2_create_package ament_cmake "$package_name" "" "$@"
+
+  if (( interface_mode )); then
+    _ros2_create_interface_package "$package_name" "$@"
+  else
+    _ros2_create_package ament_cmake "$package_name" "" "$@"
+  fi
 }
 
 ros_package_python() {
@@ -1446,7 +1643,20 @@ Build
 Package creation and discovery
 
   rpcpp PACKAGE [DEPENDENCY...]
-      Create an ament_cmake package.
+      Create a normal ament_cmake package.
+
+  rpcpp -i PACKAGE [INTERFACE_DEPENDENCY...]
+  rpcpp --interface PACKAGE [INTERFACE_DEPENDENCY...]
+      Create an interface-only ament_cmake package scaffold with:
+        msg/
+        srv/
+        action/
+        rosidl_default_generators
+        rosidl_default_runtime
+        rosidl_interface_packages group membership
+
+      Additional arguments are packages referenced by fields inside the
+      interface definitions, for example geometry_msgs or sensor_msgs.
 
   rppy PACKAGE [DEPENDENCY...]
       Create an ament_python package.
@@ -1689,6 +1899,17 @@ Package commands
 Create a C++ package:
 
   rpcpp offboard rclcpp px4_msgs geometry_msgs eigen3_cmake_module
+
+Create an interface package containing only primitive fields:
+
+  rpcpp -i tutorial_interfaces
+
+Create an interface package whose definitions may reference geometry_msgs:
+
+  rpcpp -i tutorial_interfaces geometry_msgs
+
+The -i/--interface scaffold creates msg/, srv/, and action/ directories and
+configures rosidl generation. It creates no executable target.
 
 Create a C++ package with an initial node:
 
